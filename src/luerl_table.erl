@@ -146,8 +146,9 @@ length(#tref{i=N}=T, St) ->
     Meta = luerl_eval:getmetamethod(T, <<"__len">>, St),
     if ?IS_TRUE(Meta) -> luerl_eval:functioncall(Meta, [T], St);
        true ->
-	    #table{t=Tab} = ?GET_TABLE(N, St#luerl.tabs),
-	    {[length_loop(Tab)],St}
+	    #table{a=Arr} = ?GET_TABLE(N, St#luerl.tabs),
+	    %% {[length_loop(Tab)],St}
+	    {[array:size(Arr)-1],St}
     end.
 
 length_loop([{1.0,_}|T]) -> length_loop(T, 2.0);

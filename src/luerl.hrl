@@ -52,7 +52,9 @@
 %% Data types.
 
 -record(tref, {i}).				%Table reference, index
--record(table, {t=[],m=nil}).			%Table type, tab and meta
+-record(table, {a,t=[],m=nil}).			%Table type, array, tab, meta
+-record(eref, {i}).				%Environment reference, index
+-record(env, {t=[]}).				%Environment type, table
 -record(userdata, {d,m=nil}).			%Userdata type, data and meta
 -record(thread, {}).				%Thread type
 

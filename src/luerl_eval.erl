@@ -97,11 +97,26 @@ pop_env(#luerl{env=[_|Es]}=St) ->
 alloc_table(St) -> alloc_table(orddict:new(), St).
 
 alloc_table(Itab, #luerl{tabs=Ts0,free=[N|Ns]}=St) ->
-    Ts1 = ?SET_TABLE(N, #table{t=Itab,m=nil}, Ts0),
+    T = init_table(Itab),
+    Ts1 = ?SET_TABLE(N, T, Ts0),
     {#tref{i=N},St#luerl{tabs=Ts1,free=Ns}};
 alloc_table(Itab, #luerl{tabs=Ts0,free=[],next=N}=St) ->
-    Ts1 = ?SET_TABLE(N, #table{t=Itab,m=nil}, Ts0),
+    T = init_table(Itab),
+    Ts1 = ?SET_TABLE(N, T, Ts0),
     {#tref{i=N},St#luerl{tabs=Ts1,next=N+1}}.
+
+init_table(Itab) ->
+    T0 = orddict:new(),
+    A0 = array:new(),
+    Init = fun ({K,V}, {T,A}) when is_number(K) ->
+		   case ?IS_INTEGER(K, I) of
+		       true -> {T,array:set(I, V, A)};
+		       false -> {orddict:store(K, V, T),A}
+		   end;
+	       ({K,V}, {T,A}) -> {orddict:store(K, V, T),A}
+	   end,
+    {T1,A1} = lists:foldl(Init, {T0,A0}, Itab),
+    #table{a=A1,t=T1,m=nil}.
 
 free_table(#tref{i=N}, #luerl{tabs=Ts0,free=Ns}=St) ->
     Ts1 = ?DEL_TABLE(N, Ts0),
@@ -117,34 +132,81 @@ free_table(#tref{i=N}, #luerl{tabs=Ts0,free=Ns}=St) ->
 set_table_name(Tab, Name, Val, St) ->
     set_table_key(Tab, atom_to_binary(Name, latin1), Val, St).
 
-set_table_key(#tref{i=N}, Key, Val, #luerl{tabs=Ts0}=St) ->
-    #table{t=Tab0,m=Meta} = ?GET_TABLE(N, Ts0),	%Get the table
+set_table_key(#tref{}=Tref, Key, Val, St) when is_number(Key) ->
+    case ?IS_INTEGER(Key, I) of
+	true -> set_table_int_key(Tref, Key, I, Val, St);
+	false -> set_table_key_key(Tref, Key, Val, St)
+    end;
+set_table_key(#tref{}=Tref, Key, Val, St) ->
+    set_table_key_key(Tref, Key, Val, St);
+set_table_key(Tab, Key, _, _) ->
+    lua_error({illegal_index,Tab,Key}).
+
+set_table_key_key(#tref{i=N}, Key, Val, #luerl{tabs=Ts0}=St) ->
+    #table{t=Tab0,m=Meta}=T = ?GET_TABLE(N, Ts0),	%Get the table
     case orddict:find(Key, Tab0) of
 	{ok,_} ->
 %% 	    Tab1 = if Val =:= nil -> orddict:erase(Key, Tab0);
 %% 		      true -> orddict:store(Key, Val, Tab0)
 %% 		   end,
 	    Tab1 = orddict:store(Key, Val, Tab0),
-	    Ts1 = ?SET_TABLE(N, #table{t=Tab1,m=Meta}, Ts0),
+	    Ts1 = ?SET_TABLE(N, T#table{t=Tab1}, Ts0),
 	    St#luerl{tabs=Ts1};
 	error ->
 	    case getmetamethod_tab(Meta, <<"__newindex">>, Ts0) of
 		nil ->
 		    Tab1 = orddict:store(Key, Val, Tab0),
-		    Ts1 = ?SET_TABLE(N, #table{t=Tab1,m=Meta}, Ts0),
+		    Ts1 = ?SET_TABLE(N, T#table{t=Tab1}, Ts0),
 		    St#luerl{tabs=Ts1};
 		Meth when element(1, Meth) =:= function ->
 		    functioncall(Meth, [Key,Val], St);
 		Meth -> set_table_key(Meth, Key, Val, St)
 	    end
-    end;
-set_table_key(Tab, Key, _, _) ->
-    lua_error({illegal_index,Tab,Key}).
+    end.
+
+set_table_int_key(#tref{i=N}, Key, I, Val, #luerl{tabs=Ts0}=St) ->
+    #table{a=A0,m=Meta}=T = ?GET_TABLE(N, Ts0),	%Get the table
+    case array:get(I, A0) of
+	undefined ->
+	    case getmetamethod_tab(Meta, <<"__newindex">>, Ts0) of
+		nil ->
+		    A1 = array:set(I, Val, A0),
+		    Ts1 = ?SET_TABLE(N, T#table{a=A1}, Ts0),
+		    St#luerl{tabs=Ts1};
+		Meth when element(1, Meth) =:= function ->
+		    functioncall(Meth, [Key,Val], St);
+		Meth -> set_table_key(Meth, Key, Val, St)
+	    end;
+	_ ->
+%% 	    Tab1 = if Val =:= nil -> orddict:erase(Key, Tab0);
+%% 		      true -> orddict:store(Key, Val, Tab0)
+%% 		   end,
+	    A1 = array:set(I, Val, A0),
+	    Ts1 = ?SET_TABLE(N, T#table{a=A1}, Ts0),
+	    St#luerl{tabs=Ts1}
+    end.
 
 get_table_name(Tab, Name, St) ->
     get_table_key(Tab, atom_to_binary(Name, latin1), St).
 
-get_table_key(#tref{i=N}=T, Key, #luerl{tabs=Ts}=St) ->
+get_table_key(#tref{}=Tref, Key, St) when is_number(Key) ->
+    case ?IS_INTEGER(Key, I) of
+	true -> get_table_int_key(Tref, Key, I, St);
+	false -> get_table_key_key(Tref, Key, St)
+    end;
+get_table_key(#tref{}=Tref, Key, St) ->
+    get_table_key_key(Tref, Key, St);
+get_table_key(Tab, Key, St) ->			%Just find the metamethod
+    case getmetamethod(Tab, <<"__index">>, St) of
+	nil -> lua_error({illegal_index,Tab,Key});
+	Meth when element(1, Meth) =:= function ->
+	    {Vs,St1} = functioncall(Meth, [Tab,Key], St),
+	    {first_value(Vs),St1};		%Only one value
+	Meth ->					%Recurse down the metatable
+	    get_table_key(Meth, Key, St)
+    end.
+
+get_table_key_key(#tref{i=N}=T, Key, #luerl{tabs=Ts}=St) ->
     #table{t=Tab,m=Meta} = ?GET_TABLE(N, Ts),	%Get the table.
     case orddict:find(Key, Tab) of
 	{ok,Val} -> {Val,St};
@@ -158,15 +220,22 @@ get_table_key(#tref{i=N}=T, Key, #luerl{tabs=Ts}=St) ->
 		Meth ->				%Recurse down the metatable
 		    get_table_key(Meth, Key, St)
 	    end
-    end;
-get_table_key(Tab, Key, St) ->			%Just find the metamethod
-    case getmetamethod(Tab, <<"__index">>, St) of
-	nil -> lua_error({illegal_index,Tab,Key});
-	Meth when element(1, Meth) =:= function ->
-	    {Vs,St1} = functioncall(Meth, [Tab,Key], St),
-	    {first_value(Vs),St1};		%Only one value
-	Meth ->					%Recurse down the metatable
-	    get_table_key(Meth, Key, St)
+    end.
+
+get_table_int_key(#tref{i=N}=T, Key, I, #luerl{tabs=Ts}=St) ->
+    #table{a=A,m=Meta} = ?GET_TABLE(N, Ts),	%Get the table.
+    case array:get(I, A) of
+	undefined ->
+	    %% Key not present so try metamethod
+	    case getmetamethod_tab(Meta, <<"__index">>, Ts) of
+		nil -> {nil,St};
+		Meth when element(1, Meth) =:= function ->
+		    {Vs,St1} = functioncall(Meth, [T,Key], St),
+		    {first_value(Vs),St1};	%Only one value
+		Meth ->				%Recurse down the metatable
+		    get_table_key(Meth, Key, St)
+	    end;
+	Val -> {Val,St}
     end.
 
 %% set_local_name(Name, Val, State) -> State.

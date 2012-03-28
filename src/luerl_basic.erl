@@ -97,38 +97,87 @@ error([M|_], _) -> lua_error(M);		%Never returns!
 error(As, _) -> lua_error({badarg,error,As}).
 
 ipairs([#tref{}=T|_], St) ->
-    {[{function,fun ipairs_next/2},T,0],St};
+    {[{function,fun ipairs_next/2},T,0.0],St};
 ipairs(As, _) -> lua_error({badarg,ipairs,As}).
     
-ipairs_next([A], St) -> ipairs_next([A,0], St);
-ipairs_next([#tref{i=T},I|_], St) ->
-    #table{t=Tab} = ?GET_TABLE(T, St#luerl.tabs),	%Get the table
-    Next = I + 1.0,				%Ensure float!
-    case orddict:find(Next, Tab) of
-	{ok,V} -> {[Next,V],St};
-	error -> {[nil],St}
-    end.
+ipairs_next([A], St) -> ipairs_next([A,0.0], St);
+ipairs_next([#tref{i=T},K|_], St) when is_number(K) ->
+    #table{a=Arr} = ?GET_TABLE(T, St#luerl.tabs),	%Get the table
+    case ?IS_INTEGER(K, I) of
+	true when I >= 0 ->
+	    Next = I + 1,
+	    case array:get(Next, Arr) of
+		undefined -> {[nil],St};
+		V -> {[float(Next),V],St}
+	    end;
+	_ -> lua_error({invalid_key,ipairs,K})
+    end;
+ipairs_next(As, _) -> lua_error({badarg,ipairs,As}).
+
+
+%%     Next = I + 1,				%Ensure float!
+%%     case array:get(Next, Arr) of
+%% 	undefined -> {[nil],St};
+%% 	V -> {[float(Next),V],St}
+%%     end.
 
 next([A], St) -> next([A,nil], St);
 next([#tref{i=T},K|_], St) ->
-    #table{t=Tab} = ?GET_TABLE(T, St#luerl.tabs),	%Get the table
+    #table{a=Arr,t=Tab} = ?GET_TABLE(T, St#luerl.tabs),	%Get the table
     if K == nil ->
-	    case Tab of
-		[{F,V}|_] -> {[F,V],St};
-		[] -> {[nil],St}
+	    %% Find the first, start with the array.
+	    %% io:format("n: ~p\n", [{Arr,Tab}]),
+	    case next_index_loop(1, array:size(Arr), Arr) of
+		{I,V} -> {[float(I),V],St};
+		none ->
+		    case Tab of
+			[{F,V}|_] -> {[F,V],St};
+			[] -> {[nil],St}
+		    end
 	    end;
-       true ->
-	    case next_loop(K, Tab) of
-		[{Next,V}|_] -> {[Next,V],St};
-		[] -> {[nil],St};
-		error -> lua_error({invalid_key,K})
-	    end
+       is_number(K) ->
+	    case ?IS_INTEGER(K, I0) of
+		true when I0 >= 1 ->
+		    case next_index(I0, Arr) of
+			{I1,V} -> {[float(I1),V],St};
+			%% undefined -> lua_error({invalid_key,next,K});
+			_ ->
+			    case Tab of
+				[{F,V}|_] -> {[F,V],St};
+				[] -> {[nil],St}
+			    end;
+			none -> next_key(K, Tab, St)
+		    end;
+		_ -> next_key(K, Tab, St)	%Not integer or negative
+	    end;
+       true -> next_key(K, Tab, St)
     end;
 next(As, _) -> lua_error({badarg,next,As}).
 
-next_loop(K, [{K,_}|Tab]) -> Tab;
-next_loop(K, [_|Tab]) -> next_loop(K, Tab);
-next_loop(_, []) ->  error.
+next_index(I0, Arr) ->
+    case array:get(I0, Arr) of
+	undefined -> undefined;
+	_ ->					%Not interested in this value
+	    next_index_loop(I0+1, array:size(Arr), Arr)
+    end.
+
+next_index_loop(I, S, _) when I >= S -> none;
+next_index_loop(I, S, Arr) ->
+    case array:get(I, Arr) of
+	undefined -> next_index_loop(I+1, S, Arr);
+	Val -> {I,Val}
+    end.
+
+next_key(K, Tab, St) ->
+    case next_key_loop(K, Tab) of
+	[{Next,V}|_] -> {[Next,V],St};
+	[] -> {[nil],St};
+	none -> lua_error({invalid_key,next,K})
+    end.
+
+next_key_loop(K, [{K,_}|Tab]) -> Tab;
+next_key_loop(K, [_|Tab]) -> next_key_loop(K, Tab);
+next_key_loop(_, []) ->  none.
 
 pairs([#tref{}=T|_], St) ->
     {[{function,fun next/2},T,nil],St};
@@ -156,8 +205,8 @@ rawget(As, _) -> lua_error({badarg,rawget,As}).
 
 rawlen([A|_], St) when is_binary(A) -> {[float(byte_size(A))],St};
 rawlen([#tref{i=N}|_], St) ->
-    #table{t=Tab} = ?GET_TABLE(N, St#luerl.tabs),
-    {length(Tab),St};
+    #table{a=Arr} = ?GET_TABLE(N, St#luerl.tabs),
+    {array:size(Arr)-1,St};
 rawlen(As, _) -> lua_error({badarg,rawlen,As}).
 
 rawset([#tref{i=N},Key,Val|_], #luerl{tabs=Ts0}=St) ->
