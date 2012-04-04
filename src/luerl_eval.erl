@@ -146,10 +146,9 @@ set_table_key_key(#tref{i=N}, Key, Val, #luerl{tabs=Ts0}=St) ->
     #table{t=Tab0,m=Meta}=T = ?GET_TABLE(N, Ts0),	%Get the table
     case orddict:find(Key, Tab0) of
 	{ok,_} ->
-%% 	    Tab1 = if Val =:= nil -> orddict:erase(Key, Tab0);
-%% 		      true -> orddict:store(Key, Val, Tab0)
-%% 		   end,
-	    Tab1 = orddict:store(Key, Val, Tab0),
+	    Tab1 = if Val =:= nil -> orddict:erase(Key, Tab0);
+		      true -> orddict:store(Key, Val, Tab0)
+		   end,
 	    Ts1 = ?SET_TABLE(N, T#table{t=Tab1}, Ts0),
 	    St#luerl{tabs=Ts1};
 	error ->
@@ -178,9 +177,10 @@ set_table_int_key(#tref{i=N}, Key, I, Val, #luerl{tabs=Ts0}=St) ->
 		Meth -> set_table_key(Meth, Key, Val, St)
 	    end;
 	_ ->
-%% 	    Tab1 = if Val =:= nil -> orddict:erase(Key, Tab0);
-%% 		      true -> orddict:store(Key, Val, Tab0)
-%% 		   end,
+%% Should we do this here?
+%% 	    A1 = if Val =:= nil -> array:reset(Key, A0);
+%% 		    true -> array:set(Key, Val, A0)
+%% 		 end,
 	    A1 = array:set(I, Val, A0),
 	    Ts1 = ?SET_TABLE(N, T#table{a=A1}, Ts0),
 	    St#luerl{tabs=Ts1}
@@ -212,14 +212,7 @@ get_table_key_key(#tref{i=N}=T, Key, #luerl{tabs=Ts}=St) ->
 	{ok,Val} -> {Val,St};
 	error ->
 	    %% Key not present so try metamethod
-	    case getmetamethod_tab(Meta, <<"__index">>, Ts) of
-		nil -> {nil,St};
-		Meth when element(1, Meth) =:= function ->
-		    {Vs,St1} = functioncall(Meth, [T,Key], St),
-		    {first_value(Vs),St1};	%Only one value
-		Meth ->				%Recurse down the metatable
-		    get_table_key(Meth, Key, St)
-	    end
+	    get_table_metamethod(T, Meta, Key, Ts, St)
     end.
 
 get_table_int_key(#tref{i=N}=T, Key, I, #luerl{tabs=Ts}=St) ->
@@ -227,15 +220,18 @@ get_table_int_key(#tref{i=N}=T, Key, I, #luerl{tabs=Ts}=St) ->
     case array:get(I, A) of
 	undefined ->
 	    %% Key not present so try metamethod
-	    case getmetamethod_tab(Meta, <<"__index">>, Ts) of
-		nil -> {nil,St};
-		Meth when element(1, Meth) =:= function ->
-		    {Vs,St1} = functioncall(Meth, [T,Key], St),
-		    {first_value(Vs),St1};	%Only one value
-		Meth ->				%Recurse down the metatable
-		    get_table_key(Meth, Key, St)
-	    end;
+	    get_table_metamethod(T, Meta, Key, Ts, St);
 	Val -> {Val,St}
+    end.
+
+get_table_metamethod(T, Meta, Key, Ts, St) ->
+    case getmetamethod_tab(Meta, <<"__index">>, Ts) of
+	nil -> {nil,St};
+	Meth when element(1, Meth) =:= function ->
+	    {Vs,St1} = functioncall(Meth, [T,Key], St),
+	    {first_value(Vs),St1};	%Only one value
+	Meth ->				%Recurse down the metatable
+	    get_table_key(Meth, Key, St)
     end.
 
 %% set_local_name(Name, Val, State) -> State.

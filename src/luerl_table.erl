@@ -98,7 +98,6 @@ concat_join([E1|Es], Sep) ->
     iolist_to_binary([E1|[ [Sep,E] || E <- Es ]]);
 concat_join([], _) -> <<>>.
 
-
 pack(As, St0) ->
     T = pack_loop(As, 0.0),			%Indexes are floats!
     {Tab,St1} = luerl_eval:alloc_table(T, St0),
